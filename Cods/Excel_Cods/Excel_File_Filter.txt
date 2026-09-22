@@ -1,0 +1,41 @@
+function setKColumnForFashionLoopPart() {
+    let sheet = Application.ActiveSheet;
+    let modifiedRows = []; // 用于储存被修改的行号
+    
+    // 1. 设定开始和结束的行号
+    let startRow = 2;
+    let endRow = 12365;
+    
+    // 2. 严格按行循环
+    for (let i = startRow; i <= endRow; i++) {
+        let cellJ = sheet.Cells(i, "K"); 
+        
+        // 💡 获取单元格的值并转换为字符串（防止单元格为空或为数字时报错）
+        let cellValue = cellJ.Value2 ? String(cellJ.Value2) : "";
+        
+        // 💡 3. 核心修改：模拟 xlPart，只要包含 "Fashion" 就符合条件
+        // ⚠️ 注意：这里区分大小写。如果需要【忽略大小写】，请看下方的说明
+        if (cellValue.toLowerCase().includes("interior")) 
+        {
+            let cellK = sheet.Cells(i, "L"); // 获取对应的 K 列单元格
+            
+            cellK.NumberFormat = "@"; // 设置为文本格式
+            cellK.Value2 = "1";       // 写入字符串 "0"
+            
+            modifiedRows.push(i);     // 记录被修改的行号
+            sheet.Rows(i).Interior.Color = RGB(255, 242, 204);
+        }
+    }
+    
+    // 4. 处理完成后的提示
+    if (modifiedRows.length > 0) {
+        // 最多展示前 50 个行号，避免弹窗崩溃
+        let showText = modifiedRows.length > 50 ? 
+            modifiedRows.slice(0, 50).join(", ") + " ...等共 " + modifiedRows.length + " 行" : 
+            modifiedRows.join(", ");
+            
+        alert("处理完成！\n\n共成功修改了 " + modifiedRows.length + " 行。\n被修改的行号为：\n" + showText);
+    } else {
+        alert("在第 " + startRow + " 到 " + endRow + " 行的 J 列中，未找到任何【包含】 'Fashion' 的单元格。");
+    }
+}

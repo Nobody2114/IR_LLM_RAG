@@ -1,0 +1,71 @@
+function getRandomRowsWithKZero() {
+    let sheet = Application.ActiveSheet;
+    let targetRows = []; // 用于存储 K 列等于 "0" 的所有行号
+    
+    let startRow = 2;
+    let endRow = 35784;
+    
+    // 1. 第一步：先找出所有 K 列等于 "0" 的行号
+    for (let i = startRow; i <= endRow; i++) {
+        let cellK = sheet.Cells(i, "J");
+        // 获取值并转为字符串对比（防止格式是数字或文本的差异）
+        let kValue = cellK.Value2 !== null && cellK.Value2 !== undefined ? String(cellK.Value2).trim() : "";
+        
+        if (kValue === "0") {
+            targetRows.push(i);
+        }
+    }
+    
+    // 如果符合条件的行数本身就小于 200 行，则处理全部；否则随机抽 200 行
+    let sampleSize = 200;
+    if (targetRows.length === 0) {
+        alert("未找到任何 K 列标记为 '0' 的行！");
+        return;
+    }
+    
+    // 2. 第二步：从 targetRows 中随机抽取指定数量的行（无重复抽样）
+    let selectedRows = getRandomElements(targetRows, sampleSize);
+    
+    // 3. 第三步：对随机抽出的这几十/几百行进行操作（例如：整行变成浅蓝色，或做其他修改）
+    let modifiedCount = 0;
+    let modifiedRowsDisplay = [];
+    
+    for (let i = 0; i < selectedRows.length; i++) {
+        let rowNum = selectedRows[i];
+        
+        // 示例操作：将随机抽出的这行整行背景色设为浅蓝色 RGB(222, 235, 247)
+        sheet.Rows(rowNum).Interior.Color = RGB(252, 228, 214);
+        
+        // 如果你还需要顺便改其他列，可以在这里写，例如：
+        // sheet.Cells(rowNum, "L").Value2 = "已随机抽中";
+        
+        modifiedRowsDisplay.push(rowNum);
+        modifiedCount++;
+    }
+    
+    // 4. 弹窗提示结果
+    let showText = modifiedRowsDisplay.length > 50 ? 
+        modifiedRowsDisplay.slice(0, 50).join(", ") + " ...等共 " + modifiedRowsDisplay.length + " 行" : 
+        modifiedRowsDisplay.join(", ");
+        
+    alert("随机抽取完成！\n\n符合 K列=0 的总行数有: " + targetRows.length + " 行。\n本次成功随机抽取并标记了 " + modifiedCount + " 行（浅蓝色）。\n被选中的行号为：\n" + showText);
+}
+
+/**
+ * 辅助函数：从一个数组中随机无重复地抽取指定数量的元素
+ */
+function getRandomElements(arr, count) {
+    let shuffled = arr.slice(); // 复制一份，避免破坏原数组
+    let i = shuffled.length;
+    
+    // Fisher-Yates 洗牌算法
+    while (i--) {
+        let j = Math.floor(Math.random() * (i + 1));
+        let temp = shuffled[i];
+        shuffled[i] = shuffled[j];
+        shuffled[j] = temp;
+    }
+    
+    // 取前 count 个元素（如果数组总长度小于 count，则返回全部）
+    return shuffled.slice(0, Math.min(count, arr.length));
+}
