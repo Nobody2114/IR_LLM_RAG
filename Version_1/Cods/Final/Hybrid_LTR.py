@@ -172,24 +172,51 @@ else:
 
 all_query_dfs = []
 
+# 【新增】读取 wordninja 版 Inverted Index，用来在算 cosine similarity 和跑
+# extract_soft_features（含 wordninja 切词，是整个候选生成阶段最贵的一步）
+# 之前，先把候选范围缩小——不再对全部语料做这两步，只对"索引里至少命中
+# 一个查询词"的候选做。
+wn_index_path = "D:/Users/User/Desktop/TikTok_Portfolio/Cache/inverted_index_wordninja_cache.pkl"
+with open(wn_index_path, "rb") as f:
+    wn_inverted_index = pickle.load(f)
+
+id_to_pos = {int(vid): pos for pos, vid in enumerate(df['id']) if pd.notna(vid)}
+
 # === 3. 遍历 Query，构建候选集与软伪标签 ===
 for q_id, query_text in enumerate(queries):
 
-    # 向量计算
-    query_embedding = model.encode(query_text)
-    similarity_scores = util.cos_sim(query_embedding, corpus_embeddings)[0].cpu().numpy()
+    # 先查索引缩小范围（这份索引是近似的——用简单正则+wordninja逼近
+    # extract_soft_features 的精确判断，不是100%等价，所以下面
+    # match_ratio > 0 那道复查依然保留，不能省）
+    query_words = query_text.lower().split()
+    candidate_ids = set()
+    for w in query_words:
+        candidate_ids |= wn_inverted_index.get(w, set())
 
-    temp_df = df.copy()
+    if not candidate_ids:
+        print(f"⚠️ [{query_text}] wordninja 索引里一个候选都没查到，跳过。")
+        continue
+
+    candidate_positions = [id_to_pos[vid] for vid in candidate_ids if vid in id_to_pos]
+
+    # 向量计算：只对缩小后的候选算，不再对全部语料算
+    query_embedding = model.encode(query_text)
+    candidate_embeddings = corpus_embeddings[candidate_positions]
+    similarity_scores = util.cos_sim(query_embedding, candidate_embeddings)[0].cpu().numpy()
+
+    temp_df = df.iloc[candidate_positions].copy()
     temp_df["query_id"] = q_id
     temp_df["similarity_score"] = similarity_scores
 
-    # 应用软特征提取
+    # 应用软特征提取：同样只对缩小后的候选跑，这是最贵的一步（含 wordninja
+    # 切词），省下的计算量最可观
     features_df = temp_df.apply(lambda r: extract_soft_features(r, query_text), axis=1, result_type='expand')
     temp_df[["exact_match", "match_ratio", "phrase_match", "tag_match"]] = features_df
 
     # 【宽召回条件】保持不变：向量有相似度且至少命中一点词汇就进入粗筛。
-    # 召回池仍然要宽，这样每个 query 才有足够多的候选和足够的组内样本量
-    # 供 LightGBM 学习对比；真正的过滤发生在下面的 engagement_score 硬门控里。
+    # match_ratio > 0 这道复查依然保留——索引是近似筛选（简单分词 vs
+    # extract_soft_features 的精确判断不完全等价），不能假设索引放行的
+    # 候选一定全部通过，这是用近似索引换速度该留的保险。
     sub_df = temp_df[(temp_df["similarity_score"] > 0.15) & (temp_df["match_ratio"] > 0)].copy()
 
     if len(sub_df) > 0:

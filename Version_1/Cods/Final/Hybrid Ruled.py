@@ -53,52 +53,58 @@ else:
     with open(embedding_file, "wb") as f:
         pickle.dump(corpus_embeddings, f)
     print("Embeddings saved to cache.")
-
-def has_word(text, word):
-    pattern = r'(?:#|\b)' + re.escape(word) + r'\b'
-    return bool(re.search(pattern, text, re.IGNORECASE))
+    
 
 # 【新增】读取 Inverted Index 缓存，用来加速下面的关键词匹配
 index_path = "D:/Users/User/Desktop/TikTok_Portfolio/Cache/inverted_index_cache.pkl"
 with open(index_path, "rb") as f:
     inverted_index = pickle.load(f)
 
-# === 【修复①】真正按 query 循环，而不是只处理第一个 ===
+# id -> 语料库位置 的对照表，等一下要拿候选的 id 去 corpus_embeddings 这个
+# numpy 数组里取出对应的向量，数组本身只能用位置索引，不能直接用 id 查。
+id_to_pos = {int(vid): pos for pos, vid in enumerate(df['id']) if pd.notna(vid)}
+
+# === 【修复②：调换顺序】先用 Inverted Index 缩小候选范围，
+# cosine similarity 只对缩小后的候选算，不再对全部语料算一遍 ===
 all_query_dfs = []
 
 for q_id, query_text in enumerate(queries):
     keywords = [w.lower() for w in QUERY_KEYWORDS[query_text]]
 
-    # 5. 这个 query 自己的相似度（不再用 [0] 固定切第一行）——
-    # 这一步没办法用 Inverted Index 加速，Dense Vector 语义相似度天生
-    # 就得对全部语料算一遍，见上一轮的说明。
-    query_embedding = model.encode(query_text)
-    similarity_scores = util.cos_sim(query_embedding, corpus_embeddings)[0].cpu().numpy()
+    # 第一步：查 Inverted Index，拿到"至少命中一个关键词"的候选 id
+    # （这一步等同于原本 keyword_mask 要算的东西，但现在提到最前面做，
+    # 用查表代替扫描，飞快）
+    candidate_ids = set()
+    for w in keywords:
+        candidate_ids |= inverted_index.get(w, set())
 
-    temp_df = df.copy()
+    if not candidate_ids:
+        print(f"⚠️ [{query_text}] Inverted Index 里一个候选都没查到，跳过。")
+        continue
+
+    candidate_positions = [id_to_pos[vid] for vid in candidate_ids if vid in id_to_pos]
+
+    # 第二步：cosine similarity 只对这一批候选算，不再对全部语料算
+    query_embedding = model.encode(query_text)
+    candidate_embeddings = corpus_embeddings[candidate_positions]   # 只取候选那几行向量
+    similarity_scores = util.cos_sim(query_embedding, candidate_embeddings)[0].cpu().numpy()
+
+    temp_df = df.iloc[candidate_positions].copy()
     temp_df["query_id"] = q_id
     temp_df["similarity_score"] = similarity_scores
 
-    # 【核心改动】关键词匹配不再用 df["combined_text"].apply(正则扫描每一行)，
-    # 改成查 Inverted Index 拿到"包含这个词的视频 id 集合"，再用 isin()
-    # 一次性向量化判断每一行有没有命中——这才是索引该发挥作用的地方，
-    # 原本那种逐行跑正则的写法，本质上还是暴力扫描，只是换了个形式。
-    # 注意：索引用的是简单分词（小写、只留字母数字），跟原本 has_word()
-    # 的 \b 整词边界正则不完全等价，绝大多数情况结果一致，极少数含特殊
-    # 符号的边界情况可能略有出入——这是用索引换速度的取舍，如实记录。
+    # 第三步：在这批候选里，再细分"全部关键词都命中"还是"只命中一部分"
     match_flags = pd.DataFrame({
         w: temp_df['id'].isin(inverted_index.get(w, set()))
         for w in keywords
     })
-    all_matched = match_flags.all(axis=1)   # 全部关键词都命中
-    any_matched = match_flags.any(axis=1)   # 至少命中一个
+    all_matched = match_flags.all(axis=1)
+    temp_df["boosted_score"] = temp_df["similarity_score"] + np.where(all_matched, 0.4, 0.2)
+    # 注意：这里不需要再检查 any_matched 了——candidate_positions 本来就
+    # 已经是"至少命中一个关键词"的集合，能走到这里的每一行必定满足这个
+    # 条件，重复检查是多余的。
 
-    temp_df["boosted_score"] = temp_df["similarity_score"] + np.where(
-        all_matched, 0.4, np.where(any_matched, 0.2, 0.0)
-    )
-    keyword_mask = any_matched
-
-    vsm_df = temp_df[(temp_df["similarity_score"] > 0.3) & keyword_mask].copy()
+    vsm_df = temp_df[temp_df["similarity_score"] > 0.3].copy()
 
     if len(vsm_df) == 0:
         print(f"⚠️ [{query_text}] 没有任何候选通过筛选（相似度>0.3 且命中关键词），跳过。")
@@ -202,11 +208,10 @@ for query_text, gt_path in GROUND_TRUTH_FILES.items():
 
     n_judged_in_pool = eval_df['id'].isin(ground_truth['id']).sum()
     print(f"候选池大小: {len(eval_df)}   人工标注命中数: {n_judged_in_pool}/{len(ground_truth)}   NDCG@{k_actual} = {score:.4f}\n")
-    print(scored[['combined_text', 'url', 'true_relevance']].head(20).to_string())
+    print(scored.sort_values('boosted_score', ascending=False)[['combined_text', 'url', 'boosted_score', 'true_relevance']].head(20).to_string())
 
     eval_summary.append({
         "query": query_text,
-        "method": "Dense_VSM_Hardcode",
         "candidate_pool_size": len(eval_df),
         "n_judged_matched": int(n_judged_in_pool),
         "n_judged_total": len(ground_truth),

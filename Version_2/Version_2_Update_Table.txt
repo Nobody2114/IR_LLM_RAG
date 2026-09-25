@@ -1,0 +1,8 @@
+This is an undergoing project. In version 2 will contain :
+
+- RAG model for potato laptop
+- increase queries and ground truth amount to overcome "Hybrid LTR model" loss NDCG ranking.
+
+Not confirm
+- RAG model Big version ( need borrow friend laptop for running)
+- Read all parquet file ( Current project only read 1M row of data | original have 10M row)
